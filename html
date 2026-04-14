@@ -9,33 +9,7 @@
           <h4>Important Sheet Announcements</h4>
           <h5 class="right two-columns span-all"><span class="left"><span>v<span name="attr_sheet_version"> </span><span class="right">• 3/25/26'</span></span></span></h5>
           <ul>
-            <h5>Latest</h5>
-            <li>Updated the sheet's version/update function.</li>
-            <li>Fixed a bug the was introduced with the last update that prevented the sheet's version check from setting the sheet_version to the latest final_version.</li>
-            <li>Added the sheet's default attack macro to the sheet settings page. This will allow you to edit the default attack macro if desired. Editing the macro will automatically be applied to any new attacks. I've also included an "Update Attacks" button that will update all existing attacks on the sheet. The default attack macro can also be edited outside the game from the game settings page. By doing so, all new PC's/NPC's will use the customized attack macro by default. In order to update existing attacks on existing PC/NPC's, you would need to use the "Update Attacks" button from the sheet settings on each PC/NPC. This is an advanced optional feature.</li>
-            <h5>Recent/Previous</h5>
-            <li>One-time Open Doors value check/update added. Some older sheets may have a percent value for Open Doors. non-d6 values will be reset according to the Strength score.</li>
-            <li>Items removed from the Armor Details section(deleting the item's name field) will also delete the item from Equipment|Armor as well. Previously, synced items in Equipment|Armor were left untouched if the Armor Details name was deleted. These "orphaned" entries have been deemed confusing and unnecessary.</li>
-            <li>Row Shading option added. Applies a subtle alternating background contrast to sheet rows.</li>
-            <li>Linear Gradient option added. Applies subtle linear gradient background to misc. sheet sub-sections. While this has been already been in-use on the sheet, it's now optional.</li>
-            <li>Fixed Spell tab bug that only allowed spells to be seen using the "All" tab. Introduced with last weeks update.(TY @Kazdan)</li>
-            <li>Fixed a bug with the Thief "sync to class" option where the level was failing to 0. Introduced with last weeks update.</li>
-            <li>Added a "Sync Caster Class" option to the spells section. Linking to a class will automatically adjust the caster name and level values whenever the linked class changes from the top of the sheet.</li>
-            <li>Added datalist options for various fields. Datalist fields are similar to dropdown selectors, but also allow custom input as well. Added lists to; class, race, alignment, secondary skills, and non-weapon proficiencies(these also show the slot, ability, and modifier).</li>
-            <li>Added a print option to the sheet. Adjusting sub-sections, resizing text boxes, etc. as needed will help produce a better end-result. I have hidden elements that would only apply to the VTT as well as other adjustments to help the sheet be "print-friendly". Click the printer icon at the top left corner of the character journal to preview. Ensure to toggle "background graphics" from the advanced print settings to see how it effects the preview.</li>
-            <li>Updated how the to-Hit and weapon vs armor type table data is posted with attacks.</li>
-            <li>Added an "Ask" option to the sheet whisper settings. Rolls will include a query to whisper the roll or not when choosing the "Ask" option. DM sees all...</li>
-            <li>Manually changing "Current Encumbrance" in the Carrying Capacity section will also adjust movement "Speed" accordingly. Further adjusting any item weight or reloading the sheet will recalc and undo any temp encumbrance and speed changes. Similarly, you may also override adjusted speed temporarily.</li>
-            <li>Sync is now enabled by default for HP max and AC. These options can still be changed per-sheet an/or per-game by the game's creator using the game's default sheet settings. This update only effects new sheets going forward.</li>
-            <li>Updated Total HP(ie HP max) calcs for multi-class characters. "HP Total" will show HP as a decimal if multi-classing, and will round up for any partial/fractional HP that is >= 0.5 The "Partial HP" field has now been hidden but will still include any fractional HP. ie @{hitpoints_remainder_total}</li>
-            <li>Small adjustments on the NPC/Monster page to prevent overflowing elements at small window sizes.</li>
-            <li>Refactoring done for the majority of sheetworkers. Converted the callback-based Roll20 functions to async/await versions.</li>
-            <li>Some refactoring done in the sheetworker that keeps Armor Details and repeating_equipment Armor in sync. Includes a one-time update to check and set 'repeating_equipment_$X_equipment_sync_armor_flag' attribute.</li>
-            <li>Added a "lock" icon next to the armor type dropdown selector in the equipment armor sub-section. This is just a visual indicator if the item is currently synced with an Armor Details row.</li>
-            <li>Hiding Multi-Class fields has been set as the default for new sheets. These options can still be changed per-sheet or per-game by the game creator using the game's default sheet settings. This update only effects new sheets going forward.</li>
-            <li>Updated the Pick Pockets roll to not require a selected token.</li>
-          </ul>
-          <h5><span class="inline-label"><button type="roll" class="url-roll" title="Post this link to chat." value="[Roll20 Wiki Link](https://wiki.roll20.net/ADnD_1st_Edition_Character_sheet#Past_Updates)"><span>Past Updates...</span></button></span></h5>
+            <h5><span class="inline-label"><button type="roll" class="url-roll" title="Post this link to chat." value="[Roll20 Wiki Link](https://wiki.roll20.net/ADnD_1st_Edition_Character_sheet#Past_Updates)"><span>Past Updates...</span></button></span></h5>
         </div>
       </section>
     </section>
@@ -7708,54 +7682,372 @@ on('sheet:opened', function() {
     setAttrs(out, {silent: !!silentFlag});
   }
 
-  function refreshSection(section, preferDivineOnly, silentFlag) {
-    getSectionIDs(`repeating_${section}`, function(ids) {
-      if (!ids || !ids.length) return;
-      const fields = [];
-      ids.forEach(function(id) {
-        const p = `repeating_${section}_${id}_`;
-        fields.push(p + 'spell_name_select');
-        fields.push(p + 'spell_name_select_cleric');
-        fields.push(p + 'spell_name');
-        fields.push(p + 'spell_description');
-      });
-      getAttrs(fields, function(v) {
-        ids.forEach(function(id) {
-          const p = `repeating_${section}_${id}_`;
-          const chosen = v[p + 'spell_name_select'] || v[p + 'spell_name_select_cleric'] || v[p + 'spell_name'] || '';
-          if (!chosen) return;
-          const spell = divineSpellByName(chosen);
-          if (!spell) return;
-          if (preferDivineOnly || !String(v[p + 'spell_description'] || '').trim()) {
-            writeSpell(section, id, spell, silentFlag);
-          }
+  let divineRefreshToken = 0;
+  let divineRefreshLastCharacterId = '';
+
+  function divineCurrentCharacterId() {
+    try {
+      const acid = (typeof getActiveCharacterId === 'function') ? getActiveCharacterId() : '';
+      if (acid) divineRefreshLastCharacterId = acid;
+      return acid || divineRefreshLastCharacterId || '';
+    } catch (err) {
+      return divineRefreshLastCharacterId || '';
+    }
+  }
+
+  function divineWithCharacterContext(acid, fn) {
+    if (!acid || typeof setActiveCharacterId !== 'function') return fn();
+    let prev;
+    try { prev = setActiveCharacterId(acid); } catch (err) { prev = undefined; }
+    try {
+      return fn();
+    } finally {
+      try {
+        if (prev !== undefined && prev !== null && prev !== '') setActiveCharacterId(prev);
+      } catch (err) {}
+    }
+  }
+
+  function refreshSection(section, preferDivineOnly, silentFlag, acid) {
+    const ctx = acid || divineCurrentCharacterId();
+    if (!ctx) return;
+
+    divineWithCharacterContext(ctx, function() {
+      getSectionIDs(`repeating_${section}`, function(ids) {
+        divineWithCharacterContext(ctx, function() {
+          if (!ids || !ids.length) return;
+          const fields = [];
+          ids.forEach(function(id) {
+            const p = `repeating_${section}_${id}_`;
+            fields.push(p + 'spell_name_select');
+            fields.push(p + 'spell_name_select_cleric');
+            fields.push(p + 'spell_name');
+            fields.push(p + 'spell_description');
+          });
+          getAttrs(fields, function(v) {
+            divineWithCharacterContext(ctx, function() {
+              ids.forEach(function(id) {
+                const p = `repeating_${section}_${id}_`;
+                const chosen = v[p + 'spell_name_select'] || v[p + 'spell_name_select_cleric'] || v[p + 'spell_name'] || '';
+                if (!chosen) return;
+                const spell = divineSpellByName(chosen);
+                if (!spell) return;
+                if (preferDivineOnly || !String(v[p + 'spell_description'] || '').trim()) {
+                  divineWithCharacterContext(ctx, function() {
+                    writeSpell(section, id, spell, silentFlag);
+                  });
+                }
+              });
+            });
+          });
         });
       });
     });
   }
 
-  function refreshAllDivine(preferDivineOnly, silentFlag) {
-    SPELL_SECTIONS.forEach(sec => refreshSection(sec, preferDivineOnly, silentFlag));
+  function refreshAllDivine(preferDivineOnly, silentFlag, acid) {
+    const ctx = acid || divineCurrentCharacterId();
+    if (!ctx) return;
+    SPELL_SECTIONS.forEach(sec => refreshSection(sec, preferDivineOnly, silentFlag, ctx));
   }
 
   function scheduleDivineRefresh(preferDivineOnly) {
-    getSharedClass(function(className) {
-      // If the class is divine, force refresh. Otherwise still refresh blank divine rows so cleric spells in combined lists get descriptions.
-      const force = preferDivineOnly || isDivineClass(className);
-      [0, 80, 220, 500, 1000].forEach(function(ms) {
-        setTimeout(function() { refreshAllDivine(force, ms !== 0); }, ms);
+    const ctx = divineCurrentCharacterId();
+    if (!ctx) return;
+    const token = ++divineRefreshToken;
+
+    divineWithCharacterContext(ctx, function() {
+      getSharedClass(function(className) {
+        divineWithCharacterContext(ctx, function() {
+          if (token !== divineRefreshToken) return;
+          // If the class is divine, force refresh. Otherwise still refresh blank divine rows so cleric spells in combined lists get descriptions.
+          const force = preferDivineOnly || isDivineClass(className);
+          [0, 80, 220, 500, 1000].forEach(function(ms) {
+            setTimeout(function() {
+              if (token !== divineRefreshToken) return;
+              divineWithCharacterContext(ctx, function() {
+                refreshAllDivine(force, ms !== 0, ctx);
+              });
+            }, ms);
+          });
+        });
       });
     });
   }
 
   SPELL_SECTIONS.forEach(function(section) {
-    on(`change:repeating_${section}:spell_name_select change:repeating_${section}:spell_name_select_cleric change:repeating_${section}:spell_name change:repeating_${section}:spell_description`, function() {
+    on(`change:repeating_${section}:spell_name_select change:repeating_${section}:spell_name_select_cleric change:repeating_${section}:spell_name`, function() {
       scheduleDivineRefresh(false);
     });
   });
 
   on('change:class change:secondclass change:thirdclass change:class_spells_name change:caster_class_name change:spell_caster_class_name sheet:opened', function() {
     scheduleDivineRefresh(true);
+  });
+})();
+</script>
+
+
+<script type="text/worker">
+/* v46 final fix: preserve active character context for raw callbacks + repair transmogrified equipment/weapon display mapping */
+(function(){
+  'use strict';
+  if (globalThis.__v46_context_fieldmap_fix_applied) return;
+  globalThis.__v46_context_fieldmap_fix_applied = true;
+
+  function currentCharacterId() {
+    try {
+      const acid = (typeof getActiveCharacterId === 'function') ? getActiveCharacterId() : '';
+      if (acid) globalThis.__v46_last_active_character_id = acid;
+      return acid || globalThis.__v46_last_active_character_id || '';
+    } catch (err) {
+      return globalThis.__v46_last_active_character_id || '';
+    }
+  }
+
+  function withCharacterContext(acid, fn) {
+    if (!acid || typeof setActiveCharacterId !== 'function') return fn();
+    let prev;
+    try { prev = setActiveCharacterId(acid); } catch (err) { prev = undefined; }
+    try {
+      return fn();
+    } finally {
+      try {
+        if (prev !== undefined && prev !== null && prev !== '') setActiveCharacterId(prev);
+      } catch (err) {}
+    }
+  }
+
+  function wrapRawSheetFunction(name) {
+    const original = globalThis[name];
+    if (typeof original !== 'function' || original.__v46wrapped) return;
+
+    if (name === 'getSectionIDs' || name === 'getAttrs') {
+      const wrapped = function(firstArg, callback) {
+        const acid = currentCharacterId();
+        if (typeof callback !== 'function') {
+          return withCharacterContext(acid, function(){ return original(firstArg, callback); });
+        }
+        return withCharacterContext(acid, function(){
+          return original(firstArg, function(values) {
+            return withCharacterContext(acid, function(){ return callback(values); });
+          });
+        });
+      };
+      wrapped.__v46wrapped = true;
+      globalThis[name] = wrapped;
+      return;
+    }
+
+    if (name === 'setAttrs') {
+      const wrapped = function(propObj, options, callback) {
+        const acid = currentCharacterId();
+        let opts = options;
+        let cb = callback;
+        if (typeof options === 'function') {
+          cb = options;
+          opts = {};
+        }
+        if (typeof cb !== 'function') {
+          return withCharacterContext(acid, function(){ return original(propObj, opts); });
+        }
+        return withCharacterContext(acid, function(){
+          return original(propObj, opts, function(values) {
+            return withCharacterContext(acid, function(){ return cb(values); });
+          });
+        });
+      };
+      wrapped.__v46wrapped = true;
+      globalThis[name] = wrapped;
+    }
+  }
+
+  wrapRawSheetFunction('getAttrs');
+  wrapRawSheetFunction('setAttrs');
+  wrapRawSheetFunction('getSectionIDs');
+
+  function cleanText(v) {
+    return String(v || '').trim();
+  }
+
+  function hasValue(v) {
+    return cleanText(v) !== '';
+  }
+
+  function safeSetAttrs(obj, opts) {
+    if (!obj || !Object.keys(obj).length) return;
+    setAttrs(obj, opts || {silent:true});
+  }
+
+  function isKnownEquipmentLabel(label) {
+    const chosen = cleanText(label);
+    if (!chosen) return false;
+    try {
+      if (typeof equipmentFind === 'function' && equipmentFind(chosen)) return true;
+      if (typeof weaponFind === 'function' && weaponFind(chosen)) return true;
+      if (typeof armorFind === 'function') {
+        if (typeof ARMOR_DETAIL_BODY !== 'undefined' && armorFind(ARMOR_DETAIL_BODY, chosen)) return true;
+        if (typeof ARMOR_DETAIL_SHIELD !== 'undefined' && armorFind(ARMOR_DETAIL_SHIELD, chosen)) return true;
+        if (typeof ARMOR_DETAIL_HELM !== 'undefined' && armorFind(ARMOR_DETAIL_HELM, chosen)) return true;
+      }
+    } catch (err) {}
+    return false;
+  }
+
+  function repairEquipmentRow(rowId) {
+    const fSelect = `repeating_equipment_${rowId}_equipment_item_select_all`;
+    const fName = `repeating_equipment_${rowId}_equipment_item`;
+    getAttrs([fSelect, fName], function(v) {
+      const selectVal = cleanText(v[fSelect]);
+      const nameVal = cleanText(v[fName]);
+      const label = selectVal || nameVal;
+      const out = {};
+      if (!selectVal && nameVal) out[fSelect] = nameVal;
+      if (!nameVal && selectVal) out[fName] = selectVal;
+      if (Object.keys(out).length) safeSetAttrs(out, {silent:true});
+      if (label && isKnownEquipmentLabel(label) && typeof syncEquipmentRowV9 === 'function') {
+        [0, 60, 180, 400].forEach(function(ms) {
+          setTimeout(function(){ syncEquipmentRowV9(rowId, label); }, ms);
+        });
+      }
+    });
+  }
+
+  function repairAllEquipmentRows() {
+    getSectionIDs('repeating_equipment', function(ids) {
+      (ids || []).forEach(function(id) { repairEquipmentRow(id); });
+    });
+  }
+
+  function patchWeaponFromMaster(rowId, label) {
+    if (!label || typeof weaponFind !== 'function') return;
+    const weapon = weaponFind(label);
+    if (!weapon) return;
+    const base = `repeating_weapon_${rowId}_`;
+    const fields = [
+      base + 'weapon_name_select_all',
+      base + 'weapon_name',
+      base + 'weapon_attack_type',
+      base + 'weapon_damagesmallmedium',
+      base + 'weapon_damagelarge',
+      base + 'weapon_attackdmgtype',
+      base + 'weapon_rateoffire',
+      base + 'weapon_range',
+      base + 'weapon_num_attacks',
+      base + 'weapon_quantity',
+      base + 'weapon_weight',
+      base + 'weapon_cost',
+      base + 'weapon_speed',
+      base + 'weapon_length',
+      base + 'weapon_space'
+    ];
+    getAttrs(fields, function(v) {
+      const out = {};
+      if (!hasValue(v[base + 'weapon_name_select_all'])) out[base + 'weapon_name_select_all'] = label;
+      if (!hasValue(v[base + 'weapon_name'])) out[base + 'weapon_name'] = label;
+      if (!hasValue(v[base + 'weapon_attack_type'])) out[base + 'weapon_attack_type'] = weapon.attack_type || '';
+      if (!hasValue(v[base + 'weapon_damagesmallmedium'])) out[base + 'weapon_damagesmallmedium'] = weapon.dsm || '';
+      if (!hasValue(v[base + 'weapon_damagelarge'])) out[base + 'weapon_damagelarge'] = weapon.dlg || '';
+      if (!hasValue(v[base + 'weapon_attackdmgtype'])) out[base + 'weapon_attackdmgtype'] = weapon.dmgtype || '';
+      if (!hasValue(v[base + 'weapon_rateoffire'])) out[base + 'weapon_rateoffire'] = weapon.rof || '';
+      if (!hasValue(v[base + 'weapon_range'])) out[base + 'weapon_range'] = weapon.range || '';
+      if (!hasValue(v[base + 'weapon_num_attacks'])) out[base + 'weapon_num_attacks'] = weapon.num || '';
+      if (!hasValue(v[base + 'weapon_quantity'])) out[base + 'weapon_quantity'] = weapon.qty || '';
+      if (!hasValue(v[base + 'weapon_weight'])) out[base + 'weapon_weight'] = weapon.wt || '';
+      if (!hasValue(v[base + 'weapon_cost'])) out[base + 'weapon_cost'] = weapon.cost || '';
+      if (!hasValue(v[base + 'weapon_speed'])) out[base + 'weapon_speed'] = weapon.speed || '';
+      if (!hasValue(v[base + 'weapon_length'])) out[base + 'weapon_length'] = weapon.length || '';
+      if (!hasValue(v[base + 'weapon_space'])) out[base + 'weapon_space'] = weapon.space || '';
+      safeSetAttrs(out, {silent:true});
+    });
+  }
+
+  function repairWeaponRow(rowId) {
+    const fSelect = `repeating_weapon_${rowId}_weapon_name_select_all`;
+    const fName = `repeating_weapon_${rowId}_weapon_name`;
+    getAttrs([fSelect, fName], function(v) {
+      const selectVal = cleanText(v[fSelect]);
+      const nameVal = cleanText(v[fName]);
+      const label = selectVal || nameVal;
+      const out = {};
+      if (!selectVal && nameVal) out[fSelect] = nameVal;
+      if (!nameVal && selectVal) out[fName] = selectVal;
+      safeSetAttrs(out, {silent:true});
+      if (label) patchWeaponFromMaster(rowId, label);
+    });
+  }
+
+  function repairAllWeaponRows() {
+    getSectionIDs('repeating_weapon', function(ids) {
+      (ids || []).forEach(function(id) { repairWeaponRow(id); });
+    });
+  }
+
+  function repairLinkedArmorEquipmentRows() {
+    const fields = [
+      'armortype1_row_id','armortype2_row_id','armorshield_row_id','armorhelmet_row_id',
+      'armortype_select_all','armortype',
+      'armortype2_select_all','armortype2',
+      'armorshield_select_all','armorshield',
+      'armorhelmet_select_all','armorhelmet'
+    ];
+    getAttrs(fields, function(v) {
+      [
+        { row: v.armortype1_row_id, label: cleanText(v.armortype_select_all) || cleanText(v.armortype) },
+        { row: v.armortype2_row_id, label: cleanText(v.armortype2_select_all) || cleanText(v.armortype2) },
+        { row: v.armorshield_row_id, label: cleanText(v.armorshield_select_all) || cleanText(v.armorshield) },
+        { row: v.armorhelmet_row_id, label: cleanText(v.armorhelmet_select_all) || cleanText(v.armorhelmet) }
+      ].forEach(function(entry) {
+        const rowId = cleanText(entry.row);
+        const label = cleanText(entry.label);
+        if (!rowId || rowId === '0' || !label) return;
+        safeSetAttrs({
+          [`repeating_equipment_${rowId}_equipment_item`]: label,
+          [`repeating_equipment_${rowId}_equipment_item_select_all`]: label
+        }, {silent:true});
+        if (typeof syncEquipmentRowV9 === 'function') {
+          [0, 80, 220, 500].forEach(function(ms) {
+            setTimeout(function(){ syncEquipmentRowV9(rowId, label); }, ms);
+          });
+        }
+      });
+    });
+  }
+
+  on('change:repeating_weapon:weapon_name', function(e) {
+    if (e.sourceType === 'sheetworker') return;
+    const rowId = String(e.sourceAttribute || '').split('_')[2];
+    if (!rowId) return;
+    repairWeaponRow(rowId);
+  });
+
+  on('change:repeating_weapon:weapon_name_select_all', function(e) {
+    const rowId = String(e.sourceAttribute || '').split('_')[2];
+    if (!rowId) return;
+    repairWeaponRow(rowId);
+  });
+
+  on('change:repeating_equipment:equipment_item change:repeating_equipment:equipment_item_select_all', function(e) {
+    if (e.sourceType === 'sheetworker' && !/equipment_item(_select_all)?$/.test(String(e.sourceAttribute || ''))) return;
+    const rowId = String(e.sourceAttribute || '').split('_')[2];
+    if (!rowId) return;
+    repairEquipmentRow(rowId);
+  });
+
+  on('change:armortype_select_all change:armortype change:armortype2_select_all change:armortype2 change:armorshield_select_all change:armorshield change:armorhelmet_select_all change:armorhelmet change:armortype1_row_id change:armortype2_row_id change:armorshield_row_id change:armorhelmet_row_id', function() {
+    [0, 80, 220, 500].forEach(function(ms) {
+      setTimeout(repairLinkedArmorEquipmentRows, ms);
+    });
+  });
+
+  on('sheet:opened', function() {
+    [0, 80, 250, 600, 1200].forEach(function(ms) {
+      setTimeout(function(){
+        repairAllEquipmentRows();
+        repairAllWeaponRows();
+        repairLinkedArmorEquipmentRows();
+      }, ms);
+    });
   });
 })();
 </script>
