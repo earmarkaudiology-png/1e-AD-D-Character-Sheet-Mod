@@ -37,6 +37,8 @@
   --darkred: oklch(35% 0.12 26);
   --darkyellow: oklch(60% 0.1 90);
   --green: oklch(60% 0.18 145);
+  --forestgreen: rgb(26 80 0);
+  --forestgreen-input: rgb(232 242 228);
   --grey: oklch(70% 0 0);
   --link-hover: oklch(45% 0.15 250);
   --orange: oklch(60% 0.18 48);
@@ -340,6 +342,32 @@
 }
 
 .sheet-darkmode .background-selection[value='6']:checked ~ .background * {
+  color: inherit;
+}
+
+/*forest green*/
+.charsheet .background-selection[value='8']:checked ~ .background {
+  background-color: var(--forestgreen);
+  background-image: none;
+}
+
+.charsheet .background-selection[value='8']:checked ~ .background * {
+  color: var(--color-white1);
+}
+
+.charsheet .background-selection[value='8']:checked ~ .background input,
+.charsheet .background-selection[value='8']:checked ~ .background select,
+.charsheet .background-selection[value='8']:checked ~ .background textarea,
+.charsheet .background-selection[value='8']:checked ~ .background select option {
+  background-color: var(--forestgreen-input);
+  color: var(--color-black1);
+}
+
+.charsheet .background-selection[value='8']:checked ~ .background ::placeholder {
+  color: var(--color-darkgrey1);
+}
+
+.sheet-darkmode .background-selection[value='8']:checked ~ .background * {
   color: inherit;
 }
 
