@@ -6286,3 +6286,730 @@ on('sheet:opened', function() {
   );
 })();
 </script>
+
+<script type="text/worker">
+/*
+  Patch: equipment weight + decoupled armor sync
+  Append after the existing sheetworkers.
+*/
+(function () {
+  'use strict';
+
+  var ARMOR_ROW_FIELDS = [
+    'armortype1_row_id',
+    'armortype2_row_id',
+    'armorshield_row_id',
+    'armorhelmet_row_id'
+  ];
+
+  function num(v) {
+    var n = parseFloat(v);
+    return isNaN(n) ? 0 : n;
+  }
+
+  function firstNumber(v) {
+    var s = String(v == null ? '' : v).trim();
+    if (!s) return 0;
+    var m = s.match(/[-+]?\d*\.?\d+/);
+    return m ? num(m[0]) : 0;
+  }
+
+  function normWeight(v) {
+    if (typeof normalizeWeightValue === 'function') {
+      return String(normalizeWeightValue(v || '0'));
+    }
+    return String(firstNumber(v));
+  }
+
+  function formatDisplayWeight(v, useLbs) {
+    var n = num(v);
+    var shown = useLbs ? (n / 10) : n;
+    if (Math.abs(shown - Math.round(shown)) < 0.00001) return String(Math.round(shown));
+    return String(Math.round(shown * 100) / 100);
+  }
+
+  function setNoArmorLink() {
+    try {
+      if (typeof syncArmorDetailToEquipment === 'function') {
+        syncArmorDetailToEquipment = function () {};
+      }
+    } catch (err) {}
+
+    var zeroes = {};
+    ARMOR_ROW_FIELDS.forEach(function (name) { zeroes[name] = '0'; });
+    setAttrs(zeroes, { silent: true });
+
+    getSectionIDs('repeating_equipment', function (ids) {
+      if (!ids || !ids.length) return;
+      var out = {};
+      ids.forEach(function (id) {
+        out['repeating_equipment_' + id + '_equipment_sync_armor_flag'] = '0';
+      });
+      setAttrs(out, { silent: true });
+    });
+  }
+
+  function clearArmorWhenBlank(attrName, weightName, costName, defaults) {
+    var fields = [attrName];
+    getAttrs(fields, function (v) {
+      var selected = String(v[attrName] || '').trim();
+      if (selected) return;
+      var out = {};
+      out[weightName] = '0';
+      if (costName) out[costName] = '0';
+      Object.keys(defaults).forEach(function (k) {
+        out[k] = defaults[k];
+      });
+      setAttrs(out, { silent: false });
+    });
+  }
+
+  function lookupEquipmentData(label) {
+    var text = String(label || '').trim();
+    if (!text) return null;
+
+    var item = (typeof equipmentFind === 'function') ? equipmentFind(text) : null;
+    var weapon = null;
+    var armor = null;
+
+    if (typeof weaponFind === 'function') weapon = weaponFind(text);
+    if (!weapon && typeof _weaponFindV64 === 'function') weapon = _weaponFindV64(text);
+
+    if (typeof armorFind === 'function') {
+      if (typeof ARMOR_DETAIL_BODY !== 'undefined') armor = armorFind(ARMOR_DETAIL_BODY, text) || armor;
+      if (!armor && typeof ARMOR_DETAIL_SHIELD !== 'undefined') armor = armorFind(ARMOR_DETAIL_SHIELD, text) || armor;
+      if (!armor && typeof ARMOR_DETAIL_HELM !== 'undefined') armor = armorFind(ARMOR_DETAIL_HELM, text) || armor;
+    }
+
+    var canonical = text;
+    var type = '0';
+    var weight = '0';
+    var cost = '0';
+    var magical = '0';
+
+    if (item) {
+      canonical = item.item || item.name || text;
+      type = String(item.type || '0');
+      weight = normWeight(item.weight != null ? item.weight : item.wt);
+      cost = String(item.cost != null ? item.cost : '0');
+      magical = type === '3' ? '1' : '0';
+    } else if (weapon) {
+      canonical = weapon.name || weapon.item || text;
+      type = '1';
+      weight = normWeight(weapon.wt);
+      cost = String(weapon.cost != null ? weapon.cost : '0');
+      magical = /\+\d+/.test(canonical) ? '1' : '0';
+    } else if (armor) {
+      canonical = armor.name || text;
+      type = '2';
+      weight = normWeight(armor.weight);
+      cost = String(armor.cost != null ? armor.cost : '0');
+      magical = '0';
+    } else {
+      return null;
+    }
+
+    return {
+      label: canonical,
+      type: type,
+      weight: weight,
+      cost: cost,
+      magical: magical
+    };
+  }
+
+  function syncEquipmentRow(rowId) {
+    var fSel = 'repeating_equipment_' + rowId + '_equipment_item_select_all';
+    var fTxt = 'repeating_equipment_' + rowId + '_equipment_item';
+    var fWt = 'repeating_equipment_' + rowId + '_equipment_weight';
+    var fCost = 'repeating_equipment_' + rowId + '_equipment_cost';
+    var fType = 'repeating_equipment_' + rowId + '_equipment_type';
+    var fShowType = 'repeating_equipment_' + rowId + '_equipment_show_type';
+    var fMagical = 'repeating_equipment_' + rowId + '_equipment_magical';
+
+    getAttrs([fSel, fTxt, fWt, fCost, fType, fShowType, fMagical], function (v) {
+      var label = String(v[fSel] || v[fTxt] || '').trim();
+      if (!label) return;
+
+      var hit = lookupEquipmentData(label);
+      if (!hit) return;
+
+      var out = {};
+      if (String(v[fSel] || '') !== hit.label) out[fSel] = hit.label;
+      if (String(v[fTxt] || '') !== hit.label) out[fTxt] = hit.label;
+      if (String(v[fWt] || '0') !== String(hit.weight)) out[fWt] = String(hit.weight);
+      if (String(v[fCost] || '0') !== String(hit.cost)) out[fCost] = String(hit.cost);
+      if (String(v[fType] || '0') !== String(hit.type)) out[fType] = String(hit.type);
+      if (String(v[fShowType] || '0') !== String(hit.type)) out[fShowType] = String(hit.type);
+      if (String(v[fMagical] || '0') !== String(hit.magical)) out[fMagical] = String(hit.magical);
+
+      if (Object.keys(out).length) {
+        setAttrs(out, { silent: false });
+      }
+    });
+  }
+
+  function scheduleEquipmentSync(rowId) {
+    [0, 40, 120, 300].forEach(function (ms) {
+      setTimeout(function () { syncEquipmentRow(rowId); recomputeAllTotals(); }, ms);
+    });
+  }
+
+  function syncAllEquipmentRows() {
+    getSectionIDs('repeating_equipment', function (ids) {
+      if (!ids || !ids.length) return;
+      ids.forEach(function (id) { syncEquipmentRow(id); });
+      setTimeout(recomputeAllTotals, 50);
+    });
+  }
+
+  function sumEquipment(callback) {
+    getSectionIDs('repeating_equipment', function (ids) {
+      if (!ids || !ids.length) {
+        callback({ weight: 0, cost: 0 });
+        return;
+      }
+      var fields = [];
+      ids.forEach(function (id) {
+        fields.push('repeating_equipment_' + id + '_equipment_weight');
+        fields.push('repeating_equipment_' + id + '_equipment_cost');
+        fields.push('repeating_equipment_' + id + '_equipment_quantity');
+        fields.push('repeating_equipment_' + id + '_equipment_carried_select');
+        fields.push('repeating_equipment_' + id + '_equipment_carried');
+      });
+      getAttrs(fields, function (v) {
+        var totalWeight = 0;
+        var totalCost = 0;
+        ids.forEach(function (id) {
+          var qty = num(v['repeating_equipment_' + id + '_equipment_quantity'] || 0);
+          if (qty <= 0) qty = 0;
+          var wt = firstNumber(v['repeating_equipment_' + id + '_equipment_weight'] || 0);
+          var cost = num(v['repeating_equipment_' + id + '_equipment_cost'] || 0);
+          var carriedSelect = String(v['repeating_equipment_' + id + '_equipment_carried_select'] || '1');
+          var carriedFlag = String(v['repeating_equipment_' + id + '_equipment_carried'] || '0');
+          var carried = carriedSelect === '1' || carriedFlag === '1' || carriedFlag === 'on' || carriedFlag === 'true';
+          totalCost += (cost * qty);
+          if (carried) totalWeight += (wt * qty);
+        });
+        callback({ weight: totalWeight, cost: totalCost });
+      });
+    });
+  }
+
+  function sumWeapons(callback) {
+    getSectionIDs('repeating_weapon', function (ids) {
+      if (!ids || !ids.length) {
+        callback({ weight: 0, cost: 0 });
+        return;
+      }
+      var fields = [];
+      ids.forEach(function (id) {
+        fields.push('repeating_weapon_' + id + '_weapon_weight');
+        fields.push('repeating_weapon_' + id + '_weapon_cost');
+        fields.push('repeating_weapon_' + id + '_weapon_quantity');
+      });
+      getAttrs(fields, function (v) {
+        var totalWeight = 0;
+        var totalCost = 0;
+        ids.forEach(function (id) {
+          var qty = num(v['repeating_weapon_' + id + '_weapon_quantity'] || 0);
+          if (qty <= 0) qty = 0;
+          var wt = firstNumber(v['repeating_weapon_' + id + '_weapon_weight'] || 0);
+          var cost = num(v['repeating_weapon_' + id + '_weapon_cost'] || 0);
+          totalWeight += (wt * qty);
+          totalCost += (cost * qty);
+        });
+        callback({ weight: totalWeight, cost: totalCost });
+      });
+    });
+  }
+
+  function sumArmorAndCoins(callback) {
+    var fields = [
+      'armor_weight', 'armortype2_weight', 'armorshield_weight', 'armorhelmet_weight',
+      'armor_cost', 'armortype2_cost', 'armorshield_cost', 'armorhelmet_cost',
+      'pp', 'gp', 'ep', 'sp', 'cp', 'toggle_lbs',
+      'normal_load_adjusted', 'heavy_load', 'very_heavy_load', 'max_load'
+    ];
+    getAttrs(fields, function (v) {
+      var armorWeight =
+        firstNumber(v.armor_weight) +
+        firstNumber(v.armortype2_weight) +
+        firstNumber(v.armorshield_weight) +
+        firstNumber(v.armorhelmet_weight);
+
+      var armorCost =
+        num(v.armor_cost) +
+        num(v.armortype2_cost) +
+        num(v.armorshield_cost) +
+        num(v.armorhelmet_cost);
+
+      var coinGp = num(v.pp) + num(v.gp) + num(v.ep) + num(v.sp) + num(v.cp);
+      var useLbs = String(v.toggle_lbs || '0') === '1';
+      var coinDisplay = useLbs ? (coinGp / 10) : coinGp;
+
+      callback({
+        armorWeight: armorWeight,
+        armorCost: armorCost,
+        coinGp: coinGp,
+        coinDisplay: coinDisplay,
+        useLbs: useLbs,
+        normal: num(v.normal_load_adjusted),
+        heavy: num(v.heavy_load),
+        veryHeavy: num(v.very_heavy_load),
+        maxLoad: num(v.max_load)
+      });
+    });
+  }
+
+  function recomputeAllTotals() {
+    sumEquipment(function (eq) {
+      sumWeapons(function (wp) {
+        sumArmorAndCoins(function (other) {
+          var totalGp = eq.weight + wp.weight + other.armorWeight + other.coinGp;
+          var totalCost = eq.cost + wp.cost + other.armorCost;
+          var enc = 0;
+          var label = 'Unencumbered';
+
+          if (other.veryHeavy > 0 || other.heavy > 0 || other.normal > 0) {
+            if (totalGp <= other.normal) {
+              enc = 0;
+              label = 'Unencumbered';
+            } else if (totalGp <= other.heavy) {
+              enc = 1;
+              label = 'Heavy';
+            } else if (totalGp <= other.veryHeavy) {
+              enc = 2;
+              label = 'Very Heavy';
+            } else {
+              enc = 3;
+              label = 'Max';
+            }
+          }
+
+          var out = {};
+          out.total_equipment_weight = String(Math.round(eq.weight * 100) / 100);
+          out.total_equipment_weight_display = formatDisplayWeight(eq.weight, other.useLbs);
+          out.total_equipment_cost = String(Math.round(eq.cost * 100) / 100);
+
+          out.total_weapon_weight = String(Math.round(wp.weight * 100) / 100);
+          out.total_weapon_weight_display = formatDisplayWeight(wp.weight, other.useLbs);
+          out.total_weapon_cost = String(Math.round(wp.cost * 100) / 100);
+
+          out.total_armor_weight = String(Math.round(other.armorWeight * 100) / 100);
+          out.total_armor_weight_display = formatDisplayWeight(other.armorWeight, other.useLbs);
+          out.total_armor_cost = String(Math.round(other.armorCost * 100) / 100);
+
+          out.total_coin_weight = String(Math.round(other.coinGp * 100) / 100);
+          out.total_coin_weight_display = formatDisplayWeight(other.coinGp, other.useLbs);
+
+          out.total_weight = String(Math.round(totalGp * 100) / 100);
+          out.total_weight_display = formatDisplayWeight(totalGp, other.useLbs);
+          out.total_cost = String(Math.round(totalCost * 100) / 100);
+
+          out.current_encumbrance = String(enc);
+          out.current_encumbrance_label = label;
+
+          setAttrs(out, { silent: false });
+        });
+      });
+    });
+  }
+
+  // Hard-disable armor row IDs so armor details stop treating equipment rows as linked children.
+  on('sheet:opened change:armortype1_row_id change:armortype2_row_id change:armorshield_row_id change:armorhelmet_row_id', function () {
+    setNoArmorLink();
+  });
+
+  // Clear stale armor weights when selections are blank.
+  on('change:armortype change:armortype_select_all', function () {
+    clearArmorWhenBlank('armortype', 'armor_weight', 'armor_cost', {
+      armortype_ac: '10',
+      armortype_base: '10',
+      armortype_bulk: '0'
+    });
+    setTimeout(recomputeAllTotals, 30);
+  });
+
+  on('change:armortype2 change:armortype2_select_all', function () {
+    clearArmorWhenBlank('armortype2', 'armortype2_weight', 'armortype2_cost', {
+      armortype2_ac: '10',
+      armortype2_base: '10',
+      armortype2_bulk: '0'
+    });
+    setTimeout(recomputeAllTotals, 30);
+  });
+
+  on('change:armorshield change:armorshield_select_all', function () {
+    clearArmorWhenBlank('armorshield', 'armorshield_weight', 'armorshield_cost', {
+      armorshield_ac: '0',
+      armorshield_base: '0',
+      armorshield_bulk: '0'
+    });
+    setTimeout(recomputeAllTotals, 30);
+  });
+
+  on('change:armorhelmet change:armorhelmet_select_all', function () {
+    clearArmorWhenBlank('armorhelmet', 'armorhelmet_weight', 'armorhelmet_cost', {
+      armorhelmet_ac: '10',
+      armorhelmet_bulk: '0'
+    });
+    setTimeout(recomputeAllTotals, 30);
+  });
+
+  // Equipment row weight/cost sync.
+  on('change:repeating_equipment:equipment_item_select_all change:repeating_equipment:equipment_item', function (e) {
+    var rowId = e.sourceAttribute.split('_')[2];
+    scheduleEquipmentSync(rowId);
+  });
+
+  // Rebuild totals whenever relevant equipment/weapon/load fields change.
+  on(
+    'sheet:opened ' +
+    'change:repeating_equipment:equipment_weight ' +
+    'change:repeating_equipment:equipment_cost ' +
+    'change:repeating_equipment:equipment_quantity ' +
+    'change:repeating_equipment:equipment_carried_select ' +
+    'change:repeating_equipment:equipment_carried ' +
+    'change:repeating_weapon:weapon_weight ' +
+    'change:repeating_weapon:weapon_cost ' +
+    'change:repeating_weapon:weapon_quantity ' +
+    'change:armor_weight change:armortype2_weight change:armorshield_weight change:armorhelmet_weight ' +
+    'change:armor_cost change:armortype2_cost change:armorshield_cost change:armorhelmet_cost ' +
+    'change:pp change:gp change:ep change:sp change:cp ' +
+    'change:toggle_lbs ' +
+    'change:normal_load_adjusted change:heavy_load change:very_heavy_load change:max_load ' +
+    'remove:repeating_equipment remove:repeating_weapon',
+    function () {
+      setTimeout(recomputeAllTotals, 20);
+      setTimeout(recomputeAllTotals, 120);
+    }
+  );
+
+  // Initial sweep.
+  on('sheet:opened', function () {
+    setNoArmorLink();
+    syncAllEquipmentRows();
+    setTimeout(syncAllEquipmentRows, 150);
+    setTimeout(recomputeAllTotals, 250);
+    setTimeout(recomputeAllTotals, 700);
+  });
+})();
+</script>
+
+
+<script type="text/worker">
+/* FINAL OVERRIDE PATCH: revert equipment/weight math to original-style behavior */
+(function(){
+  'use strict';
+  if (globalThis.__final_original_weight_override_applied) return;
+  globalThis.__final_original_weight_override_applied = true;
+
+  function n(v){
+    var x = parseFloat(v);
+    return isNaN(x) ? 0 : x;
+  }
+
+  function yes(v){
+    return String(v || '') === '1' || String(v || '').toLowerCase() === 'on' || String(v || '').toLowerCase() === 'true';
+  }
+
+  function normLabel(v){
+    return String(v || '')
+      .toLowerCase()
+      .replace(/’/g, "'")
+      .replace(/&/g, ' and ')
+      .replace(/[()]/g, ' ')
+      .replace(/[^a-z0-9+]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  function lookupAnyItem(label){
+    var raw = String(label || '').trim();
+    if (!raw) return null;
+
+    if (typeof explicitLookup === 'function') {
+      var exp = explicitLookup(raw);
+      if (exp) {
+        return {
+          name: exp.name || raw,
+          weight: String(exp.weight != null ? exp.weight : 0),
+          cost: String(exp.cost != null ? exp.cost : 0),
+          type: String(exp.type || 'Gear')
+        };
+      }
+    }
+
+    if (typeof equipmentFind === 'function') {
+      var eq = equipmentFind(raw);
+      if (eq) {
+        var wt = '0';
+        if (typeof deriveEquipmentWeight === 'function') wt = String(deriveEquipmentWeight(raw, eq));
+        else wt = String(eq.weight != null ? eq.weight : 0);
+        return {
+          name: eq.item || eq.name || raw,
+          weight: wt,
+          cost: String(eq.cost != null ? eq.cost : 0),
+          type: String(eq.type || '0')
+        };
+      }
+    }
+
+    var w = null;
+    if (typeof weaponFind === 'function') w = weaponFind(raw);
+    if (!w && typeof _weaponFindV64 === 'function') w = _weaponFindV64(raw);
+    if (w) {
+      return {
+        name: w.name || raw,
+        weight: String(w.wt != null ? w.wt : 0),
+        cost: String(w.cost != null ? w.cost : 0),
+        type: '1'
+      };
+    }
+
+    if (typeof armorFind === 'function') {
+      var a = null;
+      if (typeof ARMOR_DETAIL_BODY !== 'undefined') a = armorFind(ARMOR_DETAIL_BODY, raw) || a;
+      if (!a && typeof ARMOR_DETAIL_SHIELD !== 'undefined') a = armorFind(ARMOR_DETAIL_SHIELD, raw) || a;
+      if (!a && typeof ARMOR_DETAIL_HELM !== 'undefined') a = armorFind(ARMOR_DETAIL_HELM, raw) || a;
+      if (a) {
+        return {
+          name: a.name || raw,
+          weight: String(a.weight != null ? a.weight : 0),
+          cost: String(a.cost != null ? a.cost : 0),
+          type: '2'
+        };
+      }
+    }
+
+    return null;
+  }
+
+  function writeRowWeightCost(rowId, label){
+    var hit = lookupAnyItem(label);
+    if (!hit) return;
+    var out = {};
+    out['repeating_equipment_' + rowId + '_equipment_item_select_all'] = hit.name;
+    out['repeating_equipment_' + rowId + '_equipment_item'] = hit.name;
+    out['repeating_equipment_' + rowId + '_equipment_weight'] = String(hit.weight || '0');
+    out['repeating_equipment_' + rowId + '_equipment_cost'] = String(hit.cost || '0');
+    setAttrs(out, {silent:false});
+  }
+
+  function scheduleRowRepair(rowId, label){
+    if (!label) return;
+    [0, 40, 120, 300, 700, 1400].forEach(function(ms){
+      setTimeout(function(){ writeRowWeightCost(rowId, label); }, ms);
+    });
+  }
+
+  function refreshEquipmentRow(rowId){
+    var f1 = 'repeating_equipment_' + rowId + '_equipment_item_select_all';
+    var f2 = 'repeating_equipment_' + rowId + '_equipment_item';
+    getAttrs([f1, f2], function(v){
+      var label = v[f1] || v[f2] || '';
+      if (!label) return;
+      scheduleRowRepair(rowId, label);
+    });
+  }
+
+  function refreshAllEquipmentRows(){
+    getSectionIDs('repeating_equipment', function(ids){
+      if (!ids || !ids.length) return;
+      ids.forEach(function(id){ refreshEquipmentRow(id); });
+    });
+  }
+
+  function sumEquipmentOriginalStyle(){
+    getSectionIDs('repeating_equipment', function(ids){
+      if (!ids || !ids.length) {
+        setAttrs({ total_equipment_weight: '0', total_equipment_cost: '0' }, {silent:false}, recomputeGrandTotalsOriginalStyle);
+        return;
+      }
+      var attrs = [];
+      ids.forEach(function(id){
+        attrs.push('repeating_equipment_' + id + '_equipment_weight');
+        attrs.push('repeating_equipment_' + id + '_equipment_cost');
+        attrs.push('repeating_equipment_' + id + '_equipment_quantity');
+        attrs.push('repeating_equipment_' + id + '_equipment_carried_select');
+        attrs.push('repeating_equipment_' + id + '_equipment_carried');
+      });
+      getAttrs(attrs, function(v){
+        var tw = 0;
+        var tc = 0;
+        ids.forEach(function(id){
+          var qty = n(v['repeating_equipment_' + id + '_equipment_quantity']);
+          if (!qty) qty = 0;
+          var wt = n(v['repeating_equipment_' + id + '_equipment_weight']);
+          var cost = n(v['repeating_equipment_' + id + '_equipment_cost']);
+          var carriedSelect = String(v['repeating_equipment_' + id + '_equipment_carried_select'] || '1');
+          var carried = carriedSelect === '1' || yes(v['repeating_equipment_' + id + '_equipment_carried']);
+          tc += (cost * qty);
+          if (carried) tw += (wt * qty);
+        });
+        setAttrs({
+          total_equipment_weight: String(Math.round(tw * 100) / 100),
+          total_equipment_cost: String(Math.round(tc * 100) / 100)
+        }, {silent:false}, recomputeGrandTotalsOriginalStyle);
+      });
+    });
+  }
+
+  function sumWeaponsOriginalStyle(){
+    getSectionIDs('repeating_weapon', function(ids){
+      if (!ids || !ids.length) {
+        setAttrs({ total_weapon_weight: '0', total_weapon_cost: '0' }, {silent:false}, recomputeGrandTotalsOriginalStyle);
+        return;
+      }
+      var attrs = [];
+      ids.forEach(function(id){
+        attrs.push('repeating_weapon_' + id + '_weapon_weight');
+        attrs.push('repeating_weapon_' + id + '_weapon_cost');
+        attrs.push('repeating_weapon_' + id + '_weapon_quantity');
+      });
+      getAttrs(attrs, function(v){
+        var tw = 0;
+        var tc = 0;
+        ids.forEach(function(id){
+          var qty = n(v['repeating_weapon_' + id + '_weapon_quantity']);
+          if (!qty) qty = 0;
+          var wt = n(v['repeating_weapon_' + id + '_weapon_weight']);
+          var cost = n(v['repeating_weapon_' + id + '_weapon_cost']);
+          tw += (wt * qty);
+          tc += (cost * qty);
+        });
+        setAttrs({
+          total_weapon_weight: String(Math.round(tw * 100) / 100),
+          total_weapon_cost: String(Math.round(tc * 100) / 100)
+        }, {silent:false}, recomputeGrandTotalsOriginalStyle);
+      });
+    });
+  }
+
+  function recomputeArmorCoinsOriginalStyle(){
+    getAttrs([
+      'pp','gp','ep','sp','cp',
+      'armor_weight','armortype2_weight','armorshield_weight','armorhelmet_weight',
+      'armor_cost','armortype2_cost','armorshield_cost','armorhelmet_cost'
+    ], function(v){
+      var coinWeight = n(v.pp) + n(v.gp) + n(v.ep) + n(v.sp) + n(v.cp);
+      var armorWeight = n(v.armor_weight) + n(v.armortype2_weight) + n(v.armorshield_weight) + n(v.armorhelmet_weight);
+      var armorCost = n(v.armor_cost) + n(v.armortype2_cost) + n(v.armorshield_cost) + n(v.armorhelmet_cost);
+      setAttrs({
+        total_coin_weight: String(Math.round(coinWeight * 100) / 100),
+        total_armor_weight: String(Math.round(armorWeight * 100) / 100),
+        total_armor_cost: String(Math.round(armorCost * 100) / 100)
+      }, {silent:false}, recomputeGrandTotalsOriginalStyle);
+    });
+  }
+
+  function recomputeGrandTotalsOriginalStyle(){
+    getAttrs([
+      'total_armor_weight','total_weapon_weight','total_coin_weight','total_equipment_weight',
+      'total_armor_cost','total_weapon_cost','total_equipment_cost',
+      'normal_load_adjusted','heavy_load','very_heavy_load','max_load'
+    ], function(v){
+      var totalWeight = n(v.total_armor_weight) + n(v.total_weapon_weight) + n(v.total_coin_weight) + n(v.total_equipment_weight);
+      var totalCost = n(v.total_armor_cost) + n(v.total_weapon_cost) + n(v.total_equipment_cost);
+      var enc = '0';
+      if (totalWeight <= n(v.normal_load_adjusted || 0)) enc = '0';
+      else if (totalWeight <= n(v.heavy_load || 0)) enc = '1';
+      else if (totalWeight <= n(v.very_heavy_load || 0)) enc = '2';
+      else enc = '3';
+      setAttrs({
+        total_weight: String(Math.round(totalWeight * 100) / 100),
+        total_cost: String(Math.round(totalCost * 100) / 100),
+        current_encumbrance: enc
+      }, {silent:false});
+    });
+  }
+
+  function fullRebuild(){
+    refreshAllEquipmentRows();
+    sumEquipmentOriginalStyle();
+    sumWeaponsOriginalStyle();
+    recomputeArmorCoinsOriginalStyle();
+    setTimeout(sumEquipmentOriginalStyle, 80);
+    setTimeout(sumWeaponsOriginalStyle, 80);
+    setTimeout(recomputeArmorCoinsOriginalStyle, 80);
+    setTimeout(recomputeGrandTotalsOriginalStyle, 150);
+    setTimeout(recomputeGrandTotalsOriginalStyle, 500);
+  }
+
+  // Decouple armor details from equipment by no-oping any sync helper if present.
+  try {
+    if (typeof syncArmorDetailToEquipment === 'function') {
+      syncArmorDetailToEquipment = function(){};
+    }
+  } catch(err) {}
+
+  on('sheet:opened', function(){
+    fullRebuild();
+    setTimeout(fullRebuild, 300);
+    setTimeout(fullRebuild, 1000);
+  });
+
+  on('change:repeating_equipment:equipment_item_select_all change:repeating_equipment:equipment_item', function(e){
+    var rowId = e.sourceAttribute.split('_')[2];
+    scheduleRowRepair(rowId, e.newValue || '');
+    setTimeout(sumEquipmentOriginalStyle, 60);
+    setTimeout(recomputeGrandTotalsOriginalStyle, 140);
+  });
+
+  on('change:repeating_equipment:equipment_weight change:repeating_equipment:equipment_cost change:repeating_equipment:equipment_quantity change:repeating_equipment:equipment_carried_select change:repeating_equipment:equipment_carried remove:repeating_equipment', function(){
+    sumEquipmentOriginalStyle();
+    setTimeout(recomputeGrandTotalsOriginalStyle, 100);
+  });
+
+  on('change:repeating_weapon:weapon_weight change:repeating_weapon:weapon_cost change:repeating_weapon:weapon_quantity remove:repeating_weapon', function(){
+    sumWeaponsOriginalStyle();
+    setTimeout(recomputeGrandTotalsOriginalStyle, 100);
+  });
+
+  on('change:pp change:gp change:ep change:sp change:cp change:armor_weight change:armortype2_weight change:armorshield_weight change:armorhelmet_weight change:armor_cost change:armortype2_cost change:armorshield_cost change:armorhelmet_cost', function(){
+    recomputeArmorCoinsOriginalStyle();
+    setTimeout(recomputeGrandTotalsOriginalStyle, 100);
+  });
+
+  on('change:normal_load_adjusted change:heavy_load change:very_heavy_load change:max_load', function(){
+    recomputeGrandTotalsOriginalStyle();
+  });
+})();
+</script>
+
+
+<script type="text/worker">
+/* Final display-weight sync fix */
+(function(){
+  'use strict';
+  function n(v){ var x = parseFloat(v); return isNaN(x) ? 0 : x; }
+  function fmt(v){
+    var r = Math.round(v * 100) / 100;
+    if (Math.abs(r - Math.round(r)) < 0.00001) return String(Math.round(r));
+    return String(r);
+  }
+  function updateDisplayWeightsFinal(){
+    getAttrs([
+      'toggle_lbs',
+      'total_equipment_weight','total_weapon_weight','total_armor_weight','total_coin_weight','total_weight'
+    ], function(v){
+      var useLbs = String(v.toggle_lbs || '0') === '1';
+      function show(x){ return useLbs ? (n(x) / 10) : n(x); }
+      setAttrs({
+        total_equipment_weight_display: fmt(show(v.total_equipment_weight)),
+        total_weapon_weight_display: fmt(show(v.total_weapon_weight)),
+        total_armor_weight_display: fmt(show(v.total_armor_weight)),
+        total_coin_weight_display: fmt(show(v.total_coin_weight)),
+        total_weight_display: fmt(show(v.total_weight))
+      }, {silent:false});
+    });
+  }
+
+  on('sheet:opened change:toggle_lbs change:total_equipment_weight change:total_weapon_weight change:total_armor_weight change:total_coin_weight change:total_weight', function(){
+    updateDisplayWeightsFinal();
+    setTimeout(updateDisplayWeightsFinal, 50);
+    setTimeout(updateDisplayWeightsFinal, 200);
+  });
+})();
+</script>
