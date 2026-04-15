@@ -6349,10 +6349,11 @@ on('sheet:opened', function() {
     });
   }
 
-  function clearArmorWhenBlank(attrName, weightName, costName, defaults) {
+  function clearArmorWhenBlank(attrName, selectName, weightName, costName, defaults) {
     var fields = [attrName];
+    if (selectName) fields.push(selectName);
     getAttrs(fields, function (v) {
-      var selected = String(v[attrName] || '').trim();
+      var selected = String((selectName ? (v[selectName] || '') : '') || v[attrName] || '').trim();
       if (selected) return;
       var out = {};
       out[weightName] = '0';
@@ -6623,7 +6624,7 @@ on('sheet:opened', function() {
 
   // Clear stale armor weights when selections are blank.
   on('change:armortype change:armortype_select_all', function () {
-    clearArmorWhenBlank('armortype', 'armor_weight', 'armor_cost', {
+    clearArmorWhenBlank('armortype', 'armortype_select_all', 'armor_weight', 'armor_cost', {
       armortype_ac: '10',
       armortype_base: '10',
       armortype_bulk: '0'
@@ -6632,7 +6633,7 @@ on('sheet:opened', function() {
   });
 
   on('change:armortype2 change:armortype2_select_all', function () {
-    clearArmorWhenBlank('armortype2', 'armortype2_weight', 'armortype2_cost', {
+    clearArmorWhenBlank('armortype2', 'armortype2_select_all', 'armortype2_weight', 'armortype2_cost', {
       armortype2_ac: '10',
       armortype2_base: '10',
       armortype2_bulk: '0'
@@ -6641,7 +6642,7 @@ on('sheet:opened', function() {
   });
 
   on('change:armorshield change:armorshield_select_all', function () {
-    clearArmorWhenBlank('armorshield', 'armorshield_weight', 'armorshield_cost', {
+    clearArmorWhenBlank('armorshield', 'armorshield_select_all', 'armorshield_weight', 'armorshield_cost', {
       armorshield_ac: '0',
       armorshield_base: '0',
       armorshield_bulk: '0'
@@ -6650,7 +6651,7 @@ on('sheet:opened', function() {
   });
 
   on('change:armorhelmet change:armorhelmet_select_all', function () {
-    clearArmorWhenBlank('armorhelmet', 'armorhelmet_weight', 'armorhelmet_cost', {
+    clearArmorWhenBlank('armorhelmet', 'armorhelmet_select_all', 'armorhelmet_weight', 'armorhelmet_cost', {
       armorhelmet_ac: '10',
       armorhelmet_bulk: '0'
     });
